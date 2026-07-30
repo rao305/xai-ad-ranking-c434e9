@@ -35,5 +35,6 @@ def rank(req: AdRequest, index: AdIndex, model: CTRModel) -> List[Scored]:
         campaign = index.campaign_for(ad)
         p = model.predict(vectorize(req, ad, campaign))
         scored.append(Scored(ad, campaign, p, ecpm(p, campaign.bid)))
-    scored.sort(key=lambda s: s.ecpm, reverse=True)
+    # Tie-break on ad id so two equal eCPMs don't shuffle between runs.
+    scored.sort(key=lambda s: (s.ecpm, s.ad.id), reverse=True)
     return scored

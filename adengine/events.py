@@ -7,14 +7,16 @@ same append-only discipline. The log is the source of truth for all metrics.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 
-from .domain import AuctionResult
+from .domain import AdRequest, AuctionResult
 
 
 @dataclass
 class ImpressionEvent:
     user_id: str
+    user_interest: str    # keep the original request interest for honest retrain
+    request_slot: int     # keep the original request slot (not auction rank)
     ad_id: str
     campaign_id: str
     rank: int
@@ -30,17 +32,32 @@ class EventLog:
 
     events: List[ImpressionEvent] = field(default_factory=list)
 
-    def record(self, req_user_id: str, result: AuctionResult, clicked: bool) -> ImpressionEvent:
-        """Log one served impression and whether it was clicked."""
+    def record(
+        self,
+        req: AdRequest,
+        result: AuctionResult,
+        clicked: bool,
+        charged: Optional[float] = None,
+    ) -> ImpressionEvent:
+        """Log one served impression and whether it was clicked.
+
+        charged lets the caller record the budget-capped amount actually billed,
+        which can be lower than the auction price near budget exhaustion.
+        """
+        revenue = 0.0
+        if clicked:
+            revenue = result.price if charged is None else charged
         ev = ImpressionEvent(
-            user_id=req_user_id,
+            user_id=req.user_id,
+            user_interest=req.user_interest,
+            request_slot=req.slot,
             ad_id=result.ad.id,
             campaign_id=result.campaign.id,
             rank=result.rank,
             predicted_ctr=result.predicted_ctr,
             price=result.price,
             clicked=clicked,
-            revenue=result.price if clicked else 0.0,
+            revenue=revenue,
         )
         self.events.append(ev)
         return ev

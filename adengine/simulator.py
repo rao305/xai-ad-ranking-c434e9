@@ -26,7 +26,7 @@ def position_bias(rank_i: int) -> float:
 
 
 def realize_click(ad: Ad, rank_i: int, rng: random.Random) -> bool:
-    """Flip a biased coin: the ad's true CTR, decayed by slot position."""
+    """Flip a biased coin: the ad's true CTR, decayed by auction slot position."""
     p_true = ad.base_ctr * position_bias(rank_i)
     return rng.random() < p_true
 
@@ -37,15 +37,18 @@ def run_session(
     model: CTRModel,
     log: EventLog,
     rng: random.Random,
+    reserve_price: float = 0.01,
 ) -> None:
     """Serve and resolve one feed view."""
     ranked = rank(req, index, model)
-    results = clear(req, ranked)
+    results = clear(req, ranked, reserve_price=reserve_price)
     for result in results:
         clicked = realize_click(result.ad, result.rank, rng)
-        log.record(req.user_id, result, clicked)
+        charged = 0.0
         if clicked:
-            index.charge(result.campaign, result.price)
+            # Charge the budget-capped amount so spend never exceeds daily budget.
+            charged = index.charge(result.campaign, result.price)
+        log.record(req, result, clicked, charged=charged if clicked else None)
 
 
 def simulate(
@@ -54,8 +57,9 @@ def simulate(
     model: CTRModel,
     log: EventLog,
     seed: int = 7,
+    reserve_price: float = 0.01,
 ) -> None:
     """Run a batch of feed views through the full serve loop."""
     rng = random.Random(seed)
     for req in requests:
-        run_session(req, index, model, log, rng)
+        run_session(req, index, model, log, rng, reserve_price=reserve_price)

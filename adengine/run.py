@@ -1,91 +1,101 @@
 """CLI entry point: seed inventory, simulate a feed, train, re-simulate, report.
 
-    python -m adengine.run
+    python -m adengine
+    python -m adengine --cold-requests 500 --train-epochs 3
 
 Shows the flywheel end to end — a cold model, a training pass on its own logs,
-and the lift in revenue when we serve again with the trained model.
+and how metrics change when we serve again with the trained model.
 """
 from __future__ import annotations
 
-import random
-from typing import List
+import argparse
+from typing import Optional, Sequence
 
-from .domain import Ad, AdRequest, Campaign
-from .events import EventLog
-from .features import vectorize
-from .metrics import compute, suggestions
-from .model import CTRModel
-from .retrieval import AdIndex
-from .simulator import realize_click, simulate
-
-CATEGORIES = ["tech", "auto", "finance", "travel"]
+from .config import EngineConfig
+from .engine import AdEngine
 
 
-def seed_inventory() -> AdIndex:
-    """A small, fixed catalog of campaigns and ads."""
-    campaigns: List[Campaign] = []
-    ads: List[Ad] = []
-    rng = random.Random(1)
-    for i, cat in enumerate(CATEGORIES):
-        for j in range(3):
-            cid = f"camp-{cat}-{j}"
-            campaigns.append(
-                Campaign(cid, f"adv-{cat}-{j}", bid=round(0.5 + rng.random(), 2),
-                         daily_budget=50.0, category=cat)
-            )
-            ads.append(
-                Ad(f"ad-{cat}-{j}", cid, f"{cat} offer {j}", cat,
-                   base_ctr=round(0.05 + rng.random() * 0.25, 3))
-            )
-    return AdIndex(ads, campaigns)
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="adengine",
+        description="Local AI-powered ad ranking and GSP auction simulator.",
+    )
+    p.add_argument("--cold-requests", type=int, default=1000, help="Requests for cold serve")
+    p.add_argument("--train-requests", type=int, default=2000, help="Requests used to train")
+    p.add_argument("--warm-requests", type=int, default=1000, help="Requests for warm serve")
+    p.add_argument("--train-epochs", type=int, default=5, help="SGD epochs on logged examples")
+    p.add_argument("--learning-rate", type=float, default=0.1, help="SGD learning rate")
+    p.add_argument("--reserve-price", type=float, default=0.01, help="Floor CPC in GSP auction")
+    p.add_argument("--daily-budget", type=float, default=50.0, help="Campaign daily budget")
+    p.add_argument("--num-slots", type=int, default=3, help="Ads filled per request")
+    p.add_argument("--seed", type=int, default=7, help="Base seed for cold/warm serve")
+    p.add_argument(
+        "--show-campaigns",
+        action="store_true",
+        help="Include per-campaign metric breakdowns in the report",
+    )
+    return p
 
 
-def seed_requests(n: int) -> List[AdRequest]:
-    rng = random.Random(2)
-    return [
-        AdRequest(f"user-{i}", rng.choice(CATEGORIES), slot=0, num_slots=3)
-        for i in range(n)
-    ]
+def config_from_args(args: argparse.Namespace) -> EngineConfig:
+    return EngineConfig(
+        cold_requests=args.cold_requests,
+        train_requests=args.train_requests,
+        warm_requests=args.warm_requests,
+        train_epochs=args.train_epochs,
+        learning_rate=args.learning_rate,
+        reserve_price=args.reserve_price,
+        daily_budget=args.daily_budget,
+        num_slots=args.num_slots,
+        cold_seed=args.seed,
+        warm_seed=args.seed,
+    )
 
 
-def training_pass(index: AdIndex, model: CTRModel) -> None:
-    """Generate labeled examples by serving once, then SGD-train on them."""
-    rng = random.Random(99)
-    log = EventLog()
-    simulate(seed_requests(2000), index, model, log, seed=99)
-    data = []
-    for ev in log.events:
-        ad = next(a for a in index.ads if a.id == ev.ad_id)
-        req = AdRequest(ev.user_id, ad.category, ev.rank, 3)
-        data.append((vectorize(req, ad, index.campaign_for(ad)), int(ev.clicked)))
-    loss = model.train(data, epochs=5)
-    print(f"trained on {len(data)} examples, final log loss {loss:.4f}")
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    engine = AdEngine(config_from_args(args))
 
+    # Cold model: weights all zero, every ad scores ~0.5.
+    cold_model = engine.new_model()
+    cold_index = engine.seed_inventory()
+    cold_log = engine.simulate(
+        engine.seed_requests(engine.config.cold_requests),
+        cold_index,
+        cold_model,
+        seed=engine.config.cold_seed,
+    )
+    cold_report = engine.report("COLD model", cold_log)
+    print(
+        engine.format_report(cold_report, cold_log if args.show_campaigns else None)
+    )
 
-def report(label: str, log: EventLog) -> None:
-    m = compute(log)
-    print(f"\n=== {label} ===")
-    print(f"impressions={m.impressions} clicks={m.clicks} "
-          f"ctr={m.ctr:.3f} revenue=${m.revenue:.2f} rpm=${m.rpm:.2f} "
-          f"calib={m.calibration_error:.3f}")
-    for s in suggestions(m):
-        print(f"  - {s}")
+    # Train on logged behavior using the exact request context, then serve again.
+    train_index = engine.seed_inventory()
+    trained = engine.new_model()
+    train_log = engine.simulate(
+        engine.seed_requests(engine.config.train_requests, seed=engine.config.request_seed + 1),
+        train_index,
+        trained,
+        seed=engine.config.train_seed,
+    )
+    loss = engine.train_from_log(trained, train_log, train_index)
+    print(f"\ntrained on {len(train_log.events)} examples, final log loss {loss:.4f}")
 
-
-def main() -> None:
-    # Cold model: weights all zero, every ad scores 0.5.
-    cold = CTRModel()
-    cold_log = EventLog()
-    simulate(seed_requests(1000), seed_inventory(), cold, cold_log, seed=7)
-    report("COLD model", cold_log)
-
-    # Train on logged behavior, then serve again with fresh inventory.
-    trained = CTRModel()
-    training_pass(seed_inventory(), trained)
-    warm_log = EventLog()
-    simulate(seed_requests(1000), seed_inventory(), trained, warm_log, seed=7)
-    report("TRAINED model", warm_log)
+    warm_index = engine.seed_inventory()
+    warm_log = engine.simulate(
+        engine.seed_requests(engine.config.warm_requests),
+        warm_index,
+        trained,
+        seed=engine.config.warm_seed,
+    )
+    warm_report = engine.report("TRAINED model", warm_log)
+    print(
+        engine.format_report(warm_report, warm_log if args.show_campaigns else None)
+    )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

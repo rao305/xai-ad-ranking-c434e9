@@ -29,6 +29,10 @@ class CTRModel:
     """Logistic regression over hashed features, trained with SGD."""
 
     def __init__(self, num_features: int = NUM_FEATURES, lr: float = 0.1) -> None:
+        if num_features < 1:
+            raise ValueError(f"num_features must be >= 1, got {num_features}")
+        if lr <= 0:
+            raise ValueError(f"lr must be > 0, got {lr}")
         self.weights: List[float] = [0.0] * num_features
         self.lr = lr
 
@@ -52,11 +56,16 @@ class CTRModel:
 
     def train(self, data: Iterable[Example], epochs: int = 1) -> float:
         """Train over the dataset for `epochs` passes. Returns final-epoch loss."""
+        if epochs < 1:
+            raise ValueError(f"epochs must be >= 1, got {epochs}")
+        # Materialize so multi-epoch training works even if callers pass a generator.
+        examples = list(data)
+        if not examples:
+            return 0.0
         last_loss = 0.0
         for _ in range(epochs):
-            total, n = 0.0, 0
-            for features, clicked in data:
+            total = 0.0
+            for features, clicked in examples:
                 total += self.update(features, clicked)
-                n += 1
-            last_loss = total / max(n, 1)
+            last_loss = total / len(examples)
         return last_loss

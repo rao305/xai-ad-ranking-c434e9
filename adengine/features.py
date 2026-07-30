@@ -17,18 +17,17 @@ NUM_FEATURES = 256
 
 def raw_features(req: AdRequest, ad: Ad, campaign: Campaign) -> List[str]:
     """Named, human-readable features for one (request, ad) opportunity."""
-    feats = [
+    return [
         "bias",                                   # always-on intercept term
         f"ad_cat={ad.category}",
         f"user_interest={req.user_interest}",
         f"slot={req.slot}",
         f"advertiser={campaign.advertiser}",
-        # The cross feature: does this user's interest match the ad's category?
+        # Cross feature: does this user's interest match the ad's category?
         f"interest_match={int(req.user_interest == ad.category)}",
         # Cross of slot position with category — top slots behave differently.
         f"slot_x_cat={req.slot}:{ad.category}",
     ]
-    return feats
 
 
 def _hash(token: str) -> int:
