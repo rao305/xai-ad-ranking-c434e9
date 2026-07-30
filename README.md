@@ -56,30 +56,6 @@ GSP price for winner i:
 
 Clicks are realized from each ad's latent `base_ctr`, decayed by auction position bias. Campaign spend is incremented only on clicks and never exceeds `daily_budget`.
 
-## Quick start
-
-Requires Python 3.10+.
-
-```bash
-python -m pip install -e ".[dev]"
-python -m adengine
-python -m pytest
-```
-
-Useful CLI knobs:
-
-```bash
-python -m adengine --help
-python -m adengine --cold-requests 200 --train-requests 400 --warm-requests 200 --train-epochs 3 --seed 7
-python -m adengine --show-campaigns
-```
-
-Or use the installed console script after editable install:
-
-```bash
-adengine --seed 7
-```
-
 ## Measured result
 
 Deterministic local run with defaults and `--seed 7`:
@@ -98,17 +74,12 @@ impressions=3000 clicks=406 ctr=0.135 revenue=$197.12 rpm=$65.71 calib=0.294
 
 Training improved CTR and calibration. Revenue fell in this seed because the warm ranker and GSP prices allocate inventory differently than a cold model that scores every ad near 0.5. That tradeoff is the point of the exercise.
 
-## Tests
-
-```bash
-python -m pytest -q
-```
 
 Coverage includes domain/config validation, feature hashing, SGD learning, targeting and budget caps, deterministic ranking/ties, GSP + reserve pricing, event/metric accuracy, train/serve feature fidelity, and an end-to-end cold→train→warm workflow.
 
-## Notes / limitations
+## Notes 
 
-- This is a local educational decision engine, not a distributed ad platform. There is no Redis, Kafka, PostgreSQL, Docker, or HTTP serving path here.
+- This is a mock decision engine, not a distributed ad platform. There is no Redis, Kafka, PostgreSQL, Docker, or HTTP serving path here. (Probably be adding it in the future IDK)
 - Inventory, bids, and click probabilities are synthetic.
 - The CTR model is plain logistic regression over hashed features — no deep model, no online learning service.
 - Suggestions are rule-based thresholds, not an auto-optimizer that mutates bids or targeting.
